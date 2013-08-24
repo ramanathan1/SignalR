@@ -22,7 +22,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         private readonly ServiceBusSubscription _subscription;
         private readonly ServiceBusConnection _connection;
         private readonly string[] _topics;
-        
+
         public ServiceBusMessageBus(IDependencyResolver resolver, ServiceBusScaleoutConfiguration configuration)
             : base(resolver, configuration)
         {
@@ -62,7 +62,14 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         {
             var stream = ServiceBusMessage.ToStream(messages);
 
-            return _subscription.Publish(streamIndex, stream);
+            return _subscription.Publish(streamIndex, stream).Catch(exception =>
+                {
+                    if (exception.InnerExceptions.Any(ex => ex is MessagingEntityNotFoundException))
+                    {
+                        _connection.Subscribe(_topics, OnMessage, OnError);
+                    }
+                }
+             );
         }
 
         private void OnMessage(int topicIndex, IEnumerable<BrokeredMessage> messages)

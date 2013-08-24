@@ -17,8 +17,8 @@ namespace Microsoft.AspNet.SignalR.Samples
             //dependencyResolver.UseRedis(config);
             //dependencyResolver.UseRedis("127.0.0.1", 6379, "", "SignalRSamples");
 
-            // Uncomment the following line to enable scale-out using service bus
-            //dependencyResolver.UseServiceBus("connection string", "Microsoft.AspNet.SignalR.Samples");
+            //Uncomment the following line to enable scale-out using service bus
+            dependencyResolver.UseServiceBus("Endpoint=sb://signalr-scaleout-sb-log.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=T7XZV4AW/1QvImg0xZ25JFV4GppZgaH6qbjfjcke0BI=", "Microsoft.AspNet.SignalR.Samples");
 
             hubPipeline.AddModule(new SamplePipelineModule());
         }

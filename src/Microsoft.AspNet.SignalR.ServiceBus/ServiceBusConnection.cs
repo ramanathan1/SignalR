@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using Microsoft.ServiceBus;
 using Microsoft.ServiceBus.Messaging;
 
@@ -18,6 +19,8 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan ErrorReadTimeout = TimeSpan.FromSeconds(0.5);
         private static readonly TimeSpan IdleSubscriptionTimeout = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
+
 
         private readonly NamespaceManager _namespaceManager;
         private readonly MessagingFactory _factory;
@@ -40,6 +43,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             }
 
             _factory = MessagingFactory.CreateFromConnectionString(configuration.ConnectionString);
+            _factory.RetryPolicy = RetryExponential.Default;
             _configuration = configuration;
         }
 
@@ -58,6 +62,45 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                 throw new ArgumentNullException("handler");
             }
 
+            while (true)
+            {
+                try
+                {
+                    CreateSubsciption(topicNames);
+                    ProcessReceivers(handler, errorHandler, 0, null);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                    throw;
+                }
+                catch (QuotaExceededException ex)
+                {
+                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                    throw;
+                }
+                catch (MessagingException ex)
+                {
+                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                    if (ex.IsTransient)
+                    {
+                        Thread.Sleep(RetryDelay);
+                    }
+                    else
+                    {
+                        return null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                    Thread.Sleep(RetryDelay);
+                }
+            }
+        }
+
+        private ServiceBusSubscription CreateSubsciption(IList<string> topicNames)
+        {
             _trace.TraceInformation("Subscribing to {0} topic(s) in the service bus...", topicNames.Count);
 
             var subscriptions = new ServiceBusSubscription.SubscriptionContext[topicNames.Count];
@@ -116,15 +159,18 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                 _trace.TraceInformation("Creation of a message receive for subscription entity path {0} in the service bus completed successfully.", subscriptionEntityPath);
 
                 subscriptions[topicIndex] = new ServiceBusSubscription.SubscriptionContext(topicName, subscriptionName, receiver);
-
-                var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
-
-                ProcessMessages(receiverContext);
             }
 
             _trace.TraceInformation("Subscription to {0} topics in the service bus Topic service completed successfully.", topicNames.Count);
 
             return new ServiceBusSubscription(_configuration, _namespaceManager, subscriptions, clients);
+        }
+
+        private void ProcessReceivers(Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, int topicIndex, MessageReceiver receiver)
+        {
+            var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
+
+            ProcessMessages(receiverContext);
         }
 
         protected virtual void Dispose(bool disposing)
@@ -172,17 +218,20 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
                 // This means the channel is closed
                 _trace.TraceError("OperationCanceledException was thrown in trying to receive the message from the service bus.");
+                receiverContext.OnError(ex);
 
                 return;
             }
             catch (Exception ex)
             {
+                _trace.TraceError(ex.Message);
                 receiverContext.OnError(ex);
 
+                return;
                 // REVIEW: What should we do here?
             }
         }
