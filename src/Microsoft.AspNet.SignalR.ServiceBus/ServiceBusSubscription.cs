@@ -12,9 +12,10 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
     internal class ServiceBusSubscription : IDisposable
     {
         private readonly NamespaceManager _namespaceManager;
-        private readonly IList<SubscriptionContext> _subscriptions;
         private readonly IList<TopicClient> _clients;
         private readonly ServiceBusScaleoutConfiguration _configuration;
+
+        public readonly IList<SubscriptionContext> Subscriptions;
 
         public ServiceBusSubscription(ServiceBusScaleoutConfiguration configuration,
                                       NamespaceManager namespaceManager,
@@ -23,7 +24,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         {
             _configuration = configuration;
             _namespaceManager = namespaceManager;
-            _subscriptions = subscriptions;
+            Subscriptions = subscriptions;
             _clients = clients;
         }
 
@@ -43,7 +44,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             {
                 for (int i = 0; i < _clients.Count; i++)
                 {
-                    var subscription = _subscriptions[i];
+                    var subscription = Subscriptions[i];
                     subscription.Receiver.Close();
 
                     _clients[i].Close();

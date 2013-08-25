@@ -66,9 +66,9 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             {
                 try
                 {
-                    IList<string> subscriptionNames = new List<string>();
-                    CreateSubsciption(topicNames, subscriptionNames);
-                    ProcessReceivers(handler, errorHandler, topicNames, subscriptionNames);
+                    ServiceBusSubscription subscription = CreateSubsciption(topicNames, handler, errorHandler);
+                    ProcessReceivers(handler, errorHandler, topicNames, subscription.Subscriptions);
+                    return subscription;
                 }
                 catch (UnauthorizedAccessException ex)
                 {
@@ -100,7 +100,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             }
         }
 
-        private ServiceBusSubscription CreateSubsciption(IList<string> topicNames, IList<string> subscriptionNames)
+        private ServiceBusSubscription CreateSubsciption(IList<string> topicNames, Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler)
         {
             _trace.TraceInformation("Subscribing to {0} topic(s) in the service bus...", topicNames.Count);
 
@@ -135,7 +135,6 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
 
                 // Create a random subscription
                 string subscriptionName = Guid.NewGuid().ToString();
-                subscriptionNames.Add(subscriptionName);
 
                 try
                 {
@@ -161,6 +160,10 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                 _trace.TraceInformation("Creation of a message receive for subscription entity path {0} in the service bus completed successfully.", subscriptionEntityPath);
 
                 subscriptions[topicIndex] = new ServiceBusSubscription.SubscriptionContext(topicName, subscriptionName, receiver);
+
+                //var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
+
+                //ProcessMessages(receiverContext);
             }
 
             _trace.TraceInformation("Subscription to {0} topics in the service bus Topic service completed successfully.", topicNames.Count);
@@ -168,14 +171,12 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             return new ServiceBusSubscription(_configuration, _namespaceManager, subscriptions, clients);
         }
 
-        private void ProcessReceivers(Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, IList<string> topicNames, string subscriptionName)
+        private void ProcessReceivers(Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, IList<string> topicNames, IList<Microsoft.AspNet.SignalR.ServiceBus.ServiceBusSubscription.SubscriptionContext> subscriptions)
         {
             for (var topicIndex = 0; topicIndex < topicNames.Count; ++topicIndex)
             {
-                string subscriptionEntityPath = SubscriptionClient.FormatSubscriptionPath(topicNames[topicIndex], subscriptionName);
+                string subscriptionEntityPath = SubscriptionClient.FormatSubscriptionPath(topicNames[topicIndex], subscriptions[topicIndex].Name);
                 MessageReceiver receiver = _factory.CreateMessageReceiver(subscriptionEntityPath, ReceiveMode.ReceiveAndDelete);
-
-                _trace.TraceInformation("Creation of a message receive for subscription entity path {0} in the service bus completed successfully.", subscriptionEntityPath);
 
                 var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
 
