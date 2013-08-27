@@ -62,7 +62,8 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         {
             var stream = ServiceBusMessage.ToStream(messages);
 
-            return _subscription.Publish(streamIndex, stream).Catch(exception =>
+            return _subscription.Publish(streamIndex, stream).
+                Catch(exception =>
                 {
                     if (exception.InnerExceptions.Any(ex => ex is MessagingEntityNotFoundException))
                     {
