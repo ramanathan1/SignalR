@@ -18,7 +18,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
         private static readonly TimeSpan ErrorBackOffAmount = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan ErrorReadTimeout = TimeSpan.FromSeconds(0.5);
-        private static readonly TimeSpan IdleSubscriptionTimeout = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan IdleSubscriptionTimeout = TimeSpan.FromHours(1);
         private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
 
 
@@ -62,42 +62,7 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                 throw new ArgumentNullException("handler");
             }
 
-            while (true)
-            {
-                try
-                {
-                    ServiceBusSubscription subscription = CreateSubsciption(topicNames, handler, errorHandler);
-                    ProcessReceivers(handler, errorHandler, topicNames, subscription.Subscriptions);
-                    return subscription;
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
-                    throw;
-                }
-                catch (QuotaExceededException ex)
-                {
-                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
-                    throw;
-                }
-                catch (MessagingException ex)
-                {
-                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
-                    if (ex.IsTransient)
-                    {
-                        Thread.Sleep(RetryDelay);
-                    }
-                    else
-                    {
-                        return null;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
-                    Thread.Sleep(RetryDelay);
-                }
-            }
+            return CreateSubsciption(topicNames, handler, errorHandler);
         }
 
         private ServiceBusSubscription CreateSubsciption(IList<string> topicNames, Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler)
@@ -109,61 +74,42 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
 
             for (var topicIndex = 0; topicIndex < topicNames.Count; ++topicIndex)
             {
-                string topicName = topicNames[topicIndex];
-
-                if (!_namespaceManager.TopicExists(topicName))
+                while (true)
                 {
                     try
                     {
-                        _trace.TraceInformation("Creating a new topic {0} in the service bus...", topicName);
-
-                        _namespaceManager.CreateTopic(topicName);
-
-                        _trace.TraceInformation("Creation of a new topic {0} in the service bus completed successfully.", topicName);
+                        CreateTopic(topicNames, handler, errorHandler, subscriptions, clients, topicIndex);
+                        break;
                     }
-                    catch (MessagingEntityAlreadyExistsException)
+                    catch (UnauthorizedAccessException ex)
                     {
-                        // The entity already exists
-                        _trace.TraceInformation("Creation of a new topic {0} threw an MessagingEntityAlreadyExistsException.", topicName);
+                        _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                        throw;
+                    }
+                    catch (QuotaExceededException ex)
+                    {
+                        _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                        throw;
+                    }
+                    catch (MessagingException ex)
+                    {
+                        _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+                        if (ex.IsTransient)
+                        {
+                            Thread.Sleep(RetryDelay);
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _trace.TraceError("Failed to initialize service bus : {0}", ex.Message);
+
+                        Thread.Sleep(RetryDelay);
                     }
                 }
-
-                // Create a client for this topic
-                clients[topicIndex] = TopicClient.CreateFromConnectionString(_configuration.ConnectionString, topicName);
-
-                _trace.TraceInformation("Creation of a new topic client {0} completed successfully.", topicName);
-
-                // Create a random subscription
-                string subscriptionName = Guid.NewGuid().ToString();
-
-                try
-                {
-                    var subscriptionDescription = new SubscriptionDescription(topicName, subscriptionName);
-
-                    // This cleans up the subscription while if it's been idle for more than the timeout.
-                    subscriptionDescription.AutoDeleteOnIdle = IdleSubscriptionTimeout;
-
-                    _namespaceManager.CreateSubscription(subscriptionDescription);
-
-                    _trace.TraceInformation("Creation of a new subscription {0} for topic {1} in the service bus completed successfully.", subscriptionName, topicName);
-                }
-                catch (MessagingEntityAlreadyExistsException)
-                {
-                    // The entity already exists
-                    _trace.TraceInformation("Creation of a new subscription {0} for topic {1} threw an MessagingEntityAlreadyExistsException.", subscriptionName, topicName);
-                }
-
-                // Create a receiver to get messages
-                string subscriptionEntityPath = SubscriptionClient.FormatSubscriptionPath(topicName, subscriptionName);
-                MessageReceiver receiver = _factory.CreateMessageReceiver(subscriptionEntityPath, ReceiveMode.ReceiveAndDelete);
-
-                _trace.TraceInformation("Creation of a message receive for subscription entity path {0} in the service bus completed successfully.", subscriptionEntityPath);
-
-                subscriptions[topicIndex] = new ServiceBusSubscription.SubscriptionContext(topicName, subscriptionName, receiver);
-
-                //var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
-
-                //ProcessMessages(receiverContext);
             }
 
             _trace.TraceInformation("Subscription to {0} topics in the service bus Topic service completed successfully.", topicNames.Count);
@@ -171,17 +117,68 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
             return new ServiceBusSubscription(_configuration, _namespaceManager, subscriptions, clients);
         }
 
-        private void ProcessReceivers(Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, IList<string> topicNames, IList<Microsoft.AspNet.SignalR.ServiceBus.ServiceBusSubscription.SubscriptionContext> subscriptions)
+        private void CreateTopic(IList<string> topicNames, Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, ServiceBusSubscription.SubscriptionContext[] subscriptions, TopicClient[] clients, int topicIndex)
         {
-            for (var topicIndex = 0; topicIndex < topicNames.Count; ++topicIndex)
+            string topicName = topicNames[topicIndex];
+
+            if (!_namespaceManager.TopicExists(topicName))
             {
-                string subscriptionEntityPath = SubscriptionClient.FormatSubscriptionPath(topicNames[topicIndex], subscriptions[topicIndex].Name);
-                MessageReceiver receiver = _factory.CreateMessageReceiver(subscriptionEntityPath, ReceiveMode.ReceiveAndDelete);
+                try
+                {
+                    _trace.TraceInformation("Creating a new topic {0} in the service bus...", topicName);
 
-                var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
+                    _namespaceManager.CreateTopic(topicName);
 
-                ProcessMessages(receiverContext);
+                    _trace.TraceInformation("Creation of a new topic {0} in the service bus completed successfully.", topicName);
+                }
+                catch (MessagingEntityAlreadyExistsException)
+                {
+                    // The entity already exists
+                    _trace.TraceInformation("Creation of a new topic {0} threw an MessagingEntityAlreadyExistsException.", topicName);
+                }
             }
+
+            // Create a client for this topic
+            clients[topicIndex] = TopicClient.CreateFromConnectionString(_configuration.ConnectionString, topicName);
+
+            _trace.TraceInformation("Creation of a new topic client {0} completed successfully.", topicName);
+
+            CreateSubscription(handler, errorHandler, subscriptions, topicIndex, topicName);
+        }
+
+        private void CreateSubscription(Action<int, IEnumerable<BrokeredMessage>> handler, Action<int, Exception> errorHandler, ServiceBusSubscription.SubscriptionContext[] subscriptions, int topicIndex, string topicName)
+        {
+            // Create a random subscription
+            string subscriptionName = Guid.NewGuid().ToString();
+
+            try
+            {
+                var subscriptionDescription = new SubscriptionDescription(topicName, subscriptionName);
+
+                // This cleans up the subscription while if it's been idle for more than the timeout.
+                subscriptionDescription.AutoDeleteOnIdle = IdleSubscriptionTimeout;
+
+                _namespaceManager.CreateSubscription(subscriptionDescription);
+
+                _trace.TraceInformation("Creation of a new subscription {0} for topic {1} in the service bus completed successfully.", subscriptionName, topicName);
+            }
+            catch (MessagingEntityAlreadyExistsException)
+            {
+                // The entity already exists
+                _trace.TraceInformation("Creation of a new subscription {0} for topic {1} threw an MessagingEntityAlreadyExistsException.", subscriptionName, topicName);
+            }
+
+            // Create a receiver to get messages
+            string subscriptionEntityPath = SubscriptionClient.FormatSubscriptionPath(topicName, subscriptionName);
+            MessageReceiver receiver = _factory.CreateMessageReceiver(subscriptionEntityPath, ReceiveMode.ReceiveAndDelete);
+
+            _trace.TraceInformation("Creation of a message receive for subscription entity path {0} in the service bus completed successfully.", subscriptionEntityPath);
+
+            subscriptions[topicIndex] = new ServiceBusSubscription.SubscriptionContext(topicName, subscriptionName, receiver);
+
+            var receiverContext = new ReceiverContext(topicIndex, receiver, handler, errorHandler);
+
+            ProcessMessages(receiverContext);
         }
 
         protected virtual void Dispose(bool disposing)
@@ -275,6 +272,10 @@ namespace Microsoft.AspNet.SignalR.ServiceBus
                 _trace.TraceError("Receiving messages from the service bus threw an OperationCanceledException, most likely due to a closed channel.");
 
                 return false;
+            }
+            catch (MessagingEntityNotFoundException ex)
+            {
+                CreateSubscription(
             }
             catch (Exception ex)
             {
